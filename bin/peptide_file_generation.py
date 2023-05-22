@@ -43,15 +43,14 @@ def remove_extension_file(filename: str) -> str:
   :param filename:
   :return:
   """
-    return filename.replace('.raw', '').replace('.RAW', '').replace('.mzML', '')
-
+    return filename.replace('.raw', '').replace('.RAW', '').replace('.mzML', '').replace('.wiff', '')
 
 def get_study_accession(sample_id: str) -> str:
     """
   Get the project accession from the Sample accession. The function expected a sample accession in the following
   format PROJECT-SAMPLEID
   :param sample_id: Sample Accession
-  :return: project accessions
+  :return: study accession
   """
     return sample_id.split('-')[0]
 
@@ -133,6 +132,8 @@ def peptide_file_generation(msstats: str, sdrf: str, compress: bool, output: str
 
     # Read the msstats file
     msstats_df = pd.read_csv(msstats, sep=',', compression=compression_method)
+    # Remove 0 intensity signals from the msstats file
+    msstats_df = msstats_df[msstats_df[INTENSITY] > 0]
 
     msstats_df.rename(
         columns={'ProteinName': PROTEIN_NAME, 'PeptideSequence': PEPTIDE_SEQUENCE, 'PrecursorCharge': PEPTIDE_CHARGE,
@@ -178,8 +179,22 @@ def peptide_file_generation(msstats: str, sdrf: str, compress: bool, output: str
         # result_df.drop(CHANNEL, axis=1, inplace=True)
         result_df = result_df[result_df["Condition"] != "Empty"]
         result_df.rename(columns={'Charge': PEPTIDE_CHARGE}, inplace=True)
+    elif 'ITRAQ' in ','.join(labels) or 'itraq' in ','.join(labels):
+        if len(labels) > 4:
+            choice = ITRAQ8plex
+        else:
+            choice = ITRAQ4plex
+        choice = pd.DataFrame.from_dict(choice, orient='index', columns=[CHANNEL]).reset_index().rename(
+            columns={'index': 'comment[label]'})
+        sdrf_df = sdrf_df.merge(choice, on='comment[label]', how='left')
+        msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(get_reference_name)
+        result_df = pd.merge(msstats_df, sdrf_df[['source name', REFERENCE, CHANNEL]], how='left',
+                             on=[REFERENCE, CHANNEL])
+        # result_df.drop(CHANNEL, axis=1, inplace=True)
+        result_df = result_df[result_df["Condition"] != "Empty"]
+        result_df.rename(columns={'Charge': PEPTIDE_CHARGE}, inplace=True)
     else:
-        print("Warning: Only support label free and TMT experiment!")
+        print("Warning: Only support label free, TMT and ITRAQ experiment!")
         exit(1)
 
     result_df.rename(columns={'source name': SAMPLE_ID}, inplace=True)

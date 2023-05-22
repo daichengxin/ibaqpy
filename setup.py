@@ -8,6 +8,7 @@ from setuptools import setup, find_packages
 
 version = '0.0.1'
 
+
 def readme():
     with open('README.md') as f:
         return f.read()
@@ -29,7 +30,6 @@ setup(
     include_package_data=True,
     install_requires=[
         'pyopenms',
-        'missingpy',
         'scikit-learn == 0.22.1',
         'numpy == 1.21',
         'click',
@@ -39,7 +39,8 @@ setup(
         'seaborn == 0.10',
         'typing_extensions'
     ],
-    scripts=['bin/compute_ibaq.py', 'bin/peptide_file_generation.py', 'bin/peptide_normalization.py', 'bin/merge_condition_files.py'],
+    scripts=['bin/compute_ibaq.py', 'bin/peptide_file_generation.py', 'bin/peptide_normalization.py',
+             'bin/merge_condition_files.py'],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: Console',
