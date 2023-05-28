@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -118,12 +119,24 @@ def remove_contaminants_decoys(dataset: DataFrame, contaminants_file: str, prote
     return dataset[~dataset[protein_field].str.contains(cregex)]
 
 
-def plot_distributions(dataset: DataFrame, field: str, class_field: str, log2: bool = True) -> None:
+def get_canonical_peptide(peptide_sequence: str) -> str:
+    """
+    This function returns a peptide sequence without the modification information
+    :param peptide_sequence: peptide sequence with mods
+    :return: peptide sequence
+    """
+    clean_peptide = re.sub("[\(\[].*?[\)\]]", "", peptide_sequence)
+    clean_peptide = clean_peptide.replace(".", "")
+    return clean_peptide
+
+
+def plot_distributions(dataset: DataFrame, field: str, class_field: str, title: str = "", log2: bool = True) -> None:
     """
     Print the quantile plot for the dataset
     :param dataset: DataFrame
     :param field: Field that would be use in the dataframe to plot the quantile
     :param class_field: Field to group the quantile into classes
+    :param title: Title of the box plot
     :param log2: Log the intensity values
     :return:
     """
@@ -135,12 +148,15 @@ def plot_distributions(dataset: DataFrame, field: str, class_field: str, log2: b
     data_wide = normalize.pivot(columns=class_field,
                                 values=field)
     # plotting multiple density plot
-    data_wide.plot.kde(figsize=(8, 6), linewidth=2, legend=False)
+    data_wide.plot.kde(figsize=(10, 6), linewidth=2, legend=False)
+    plt.title(title)
     pd.set_option('mode.chained_assignment', 'warn')
+
+    return plt.gcf()
 
 
 def plot_box_plot(dataset: DataFrame, field: str, class_field: str, log2: bool = False, weigth: int = 10,
-                  rotation: int = 45, title: str = "", violin: bool = False) -> None:
+                  rotation: int = 30, title: str = "", violin: bool = False) -> None:
     """
     Plot a box plot of two values field and classes field
     :param violin: Also add violin on top of box plot
@@ -167,5 +183,6 @@ def plot_box_plot(dataset: DataFrame, field: str, class_field: str, log2: bool =
 
     chart.set(title=title)
     chart.set_xticklabels(chart.get_xticklabels(), rotation=rotation)
-    plt.show()
     pd.set_option('mode.chained_assignment', 'warn')
+
+    return plt.gcf()

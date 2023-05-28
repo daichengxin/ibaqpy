@@ -7,10 +7,12 @@ import numpy as np
 import pandas as pd
 import qnorm
 from pandas import DataFrame
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 from ibaq.ibaqpy_commons import remove_contaminants_decoys, INTENSITY, SAMPLE_ID, NORM_INTENSITY, \
     PEPTIDE_SEQUENCE, PEPTIDE_CHARGE, FRACTION, RUN, BIOREPLICATE, PEPTIDE_CANONICAL, SEARCH_ENGINE, \
-    PROTEIN_NAME, STUDY_ID, CONDITION, plot_distributions, plot_box_plot
+    PROTEIN_NAME, STUDY_ID, CONDITION, get_canonical_peptide, plot_distributions, plot_box_plot
 
 
 def print_dataset_size(dataset: DataFrame, message: str, verbose: bool) -> None:
@@ -51,17 +53,6 @@ def remove_missing_values(normalize_df: DataFrame, ratio: float = 0.3) -> DataFr
     n_samples = len(normalize_df.columns)
     normalize_df = normalize_df.dropna(thresh=round(n_samples * ratio))
     return normalize_df
-
-
-def get_canonical_peptide(peptide_sequence: str) -> str:
-    """
-    This function returns a peptide sequence without the modification information
-    :param peptide_sequence: peptide sequence with mods
-    :return: peptide sequence
-    """
-    clean_peptide = re.sub("[\(\[].*?[\)\]]", "", peptide_sequence)
-    clean_peptide = clean_peptide.replace(".", "")
-    return clean_peptide
 
 
 def intensity_normalization(dataset: DataFrame, field: str, class_field: str = "all",
@@ -259,9 +250,10 @@ def impute_peptide_intensities(dataset_df, field, class_field):
               help="Print addition information about the distributions of the intensities, number of peptides remove "
                    "after normalization, etc.",
               is_flag=True)
+@click.option("--qc_report", help="PDF file to store multiple QC images", default="peptideNorm-QCprofile.pdf")
 def peptide_normalization(peptides: str, contaminants: str, output: str, skip_normalization: bool,
                           nmethod: str, impute: bool, pnormalization: bool, compress: bool, log2: bool,
-                          violin: bool, verbose: bool) -> None:
+                          violin: bool, verbose: bool, qc_report: str) -> None:
     """
     Normalize the peptide intensities using different methods.
     :param peptides:
@@ -275,6 +267,7 @@ def peptide_normalization(peptides: str, contaminants: str, output: str, skip_no
     :param log2:
     :param violin:
     :param verbose:
+    :param qc_report:
     :return:
     """
 
@@ -297,9 +290,15 @@ def peptide_normalization(peptides: str, contaminants: str, output: str, skip_no
 
     # Print the distribution of the original peptide intensities from quantms analysis
     if verbose:
-        plot_distributions(dataset_df, INTENSITY, SAMPLE_ID, log2=not log2)
-        plot_box_plot(dataset_df, INTENSITY, SAMPLE_ID, log2=not log2,
+        pdf = PdfPages(qc_report)
+        density = plot_distributions(dataset_df, INTENSITY, SAMPLE_ID, log2=not log2,
+                                     title="Original peptidoform intensity distribution (no normalization)")
+        plt.show()
+        pdf.savefig(density)
+        box = plot_box_plot(dataset_df, INTENSITY, SAMPLE_ID, log2=not log2,
                       title="Original peptidoform intensity distribution (no normalization)", violin=violin)
+        plt.show()
+        pdf.savefig(box)
 
     # Remove high abundant and contaminants proteins and the outliers
     if contaminants is not None:
@@ -314,9 +313,14 @@ def peptide_normalization(peptides: str, contaminants: str, output: str, skip_no
     if verbose:
         log_after_norm = nmethod == "msstats" or nmethod == "qnorm" or (
                 (nmethod == "quantile" or nmethod == "robust") and not log2)
-        plot_distributions(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm)
-        plot_box_plot(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
+        density = plot_distributions(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
+                           title="Peptidoform intensity distribution after normalization, method: " + nmethod)
+        plt.show()
+        pdf.savefig(density)
+        box = plot_box_plot(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
                       title="Peptidoform intensity distribution after normalization, method: " + nmethod, violin=violin)
+        plt.show()
+        pdf.savefig(box)
 
     print("Select the best peptidoform across fractions...")
     print("Number of peptides before peptidofrom selection: " + str(len(dataset_df.index)))
@@ -324,8 +328,9 @@ def peptide_normalization(peptides: str, contaminants: str, output: str, skip_no
     print("Number of peptides after peptidofrom selection: " + str(len(dataset_df.index)))
 
     # Add the peptide sequence canonical without the modifications
-    print("Add Canonical peptides to the dataframe...")
-    dataset_df[PEPTIDE_CANONICAL] = dataset_df[PEPTIDE_SEQUENCE].apply(lambda x: get_canonical_peptide(x))
+    if PEPTIDE_CANONICAL not in dataset_df.columns:
+        print("Add Canonical peptides to the dataframe...")
+        dataset_df[PEPTIDE_CANONICAL] = dataset_df[PEPTIDE_SEQUENCE].apply(lambda x: get_canonical_peptide(x))
 
     print("Sum all peptidoforms per Sample...")
     print("Number of peptides before sum selection: " + str(len(dataset_df.index)))
@@ -340,9 +345,14 @@ def peptide_normalization(peptides: str, contaminants: str, output: str, skip_no
     if verbose:
         log_after_norm = nmethod == "msstats" or nmethod == "qnorm" or (
                 (nmethod == "quantile" or nmethod == "robust") and not log2)
-        plot_distributions(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm)
-        plot_box_plot(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
+        density = plot_distributions(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
+                           title="Peptide intensity distribution method: " + nmethod)
+        plt.show()
+        pdf.savefig(density)
+        box = plot_box_plot(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
                       title="Peptide intensity distribution method: " + nmethod, violin=violin)
+        plt.show()
+        pdf.savefig(box)
 
     print("Peptides before removing low frequency peptides: " + str(len(dataset_df.index)))
     dataset_df = remove_low_frequency_peptides(dataset_df, 0.20)
@@ -361,9 +371,15 @@ def peptide_normalization(peptides: str, contaminants: str, output: str, skip_no
     if verbose:
         log_after_norm = nmethod == "msstats" or nmethod == "qnorm" or (
                 (nmethod == "quantile" or nmethod == "robust") and not log2)
-        plot_distributions(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm)
-        plot_box_plot(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
+        density = plot_distributions(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
+                           title="Normalization at peptide level method: " + nmethod)
+        plt.show()
+        pdf.savefig(density)
+        box = plot_box_plot(dataset_df, NORM_INTENSITY, SAMPLE_ID, log2=log_after_norm,
                       title="Normalization at peptide level method: " + nmethod, violin=violin)
+        plt.show()
+        pdf.savefig(box)
+        pdf.close()
 
     print("Save the normalized peptide intensities...")
     dataset_df.to_csv(output, index=False, sep=',')
