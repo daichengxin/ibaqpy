@@ -6,8 +6,7 @@ ibaqpy is a python package to compute IBAQ values from peptide identifications a
 
 from setuptools import setup, find_packages
 
-version = '0.0.2'
-
+version = '0.0.3'
 
 def readme():
     with open('README.md') as f:
@@ -39,7 +38,9 @@ setup(
         'seaborn',
         'typing_extensions'
     ],
-    scripts=['bin/compute_ibaq.py', 'bin/peptide_file_generation.py', 'bin/peptide_normalization.py',
+    scripts=['bin/compute_ibaq.py',
+             'bin/peptide_normalization.py',
+             'bin/peptide_normalization_stream.py',
              'bin/merge_condition_files.py'],
     classifiers=[
         'Development Status :: 4 - Beta',

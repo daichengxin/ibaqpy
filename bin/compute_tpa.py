@@ -1,16 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import click
-import pandas as pd
-from pyopenms import *
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
+import os
 
-from bin.compute_ibaq import print_help_msg, parse_uniprot_name
+import click
+import matplotlib.pyplot as plt
+import pandas as pd
+from matplotlib.backends.backend_pdf import PdfPages
+from pyopenms import *
+
+from bin.compute_ibaq import print_help_msg
 from ibaq.ibaqpy_commons import PROTEIN_NAME, INTENSITY, SAMPLE_ID, CONDITION, remove_contaminants_decoys
 from ibaq.ibaqpy_commons import plot_distributions, plot_box_plot
-import os
 
 
 @click.command()
@@ -70,6 +71,7 @@ def tpa_compute(fasta: str, contaminants: str, peptides: str, ruler: bool, ploid
             mw = AASequence().fromString(entry.sequence).getMonoWeight()
             mw_dict[name] = mw
 
+    res = res[res[PROTEIN_NAME].isin(mw_dict.keys())]
     # calculate TPA for every protein group
     def get_protein_group_mw(group: str) -> float:
         mw_list = [mw_dict[i] for i in group.split(";")]
@@ -81,11 +83,12 @@ def tpa_compute(fasta: str, contaminants: str, peptides: str, ruler: bool, ploid
     res["TPA"] = res[INTENSITY] / res["MolecularWeight"]
     # Print the distribution of the protein TPA values
     if verbose:
+        plot_width = len(set(res[SAMPLE_ID])) * 0.5 + 10
         pdf = PdfPages(qc_report)
-        density = plot_distributions(res, "TPA", SAMPLE_ID, log2=True, title="TPA Distribution")
+        density = plot_distributions(res, "TPA", SAMPLE_ID, log2=True, width=plot_width, title="TPA Distribution")
         plt.show()
         pdf.savefig(density)
-        box = plot_box_plot(res, "TPA", SAMPLE_ID, log2=True, title="TPA Distribution", violin=False)
+        box = plot_box_plot(res, "TPA", SAMPLE_ID, log2=True, width=plot_width, title="TPA Distribution", violin=False)
         plt.show()
         pdf.savefig(box)
 
@@ -125,15 +128,16 @@ def tpa_compute(fasta: str, contaminants: str, peptides: str, ruler: bool, ploid
             plt.show()
             pdf.savefig(density)
             box = plot_box_plot(res, "Copy", SAMPLE_ID, log2=True, title="Copy numbers Distribution",
-                        violin=False)
+                                violin=False)
             plt.show()
             pdf.savefig(box)
 
-            density = plot_distributions(res, "Concentration[nM]", SAMPLE_ID, log2=True, title="Concentration[nM] Distribution")
+            density = plot_distributions(res, "Concentration[nM]", SAMPLE_ID, log2=True,
+                                         title="Concentration[nM] Distribution")
             plt.show()
             pdf.savefig(density)
             box = plot_box_plot(res, "Concentration[nM]", SAMPLE_ID, log2=True, title="Concentration[nM] Distribution",
-                        violin=False)
+                                violin=False)
             plt.show()
             pdf.savefig(box)
             pdf.close()

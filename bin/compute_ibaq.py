@@ -11,17 +11,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from ibaq.ibaqpy_commons import PROTEIN_NAME, IBAQ, IBAQ_LOG, IBAQ_PPB, NORM_INTENSITY, SAMPLE_ID, IBAQ_NORMALIZED, \
-    CONDITION
+    CONDITION, print_help_msg
 from ibaq.ibaqpy_commons import plot_distributions, plot_box_plot
-
-def print_help_msg(command):
-    """
-    Print the help of the command
-    :param command: command
-    :return:
-    """
-    with click.Context(command) as ctx:
-        click.echo(command.get_help(ctx))
 
 
 def normalize(group):
@@ -95,6 +86,7 @@ def ibaq_compute(fasta: str, peptides: str, enzyme: str, normalize: bool, min_aa
         exit(1)
 
     fasta_proteins = list()  # type: list[FASTAEntry]
+    protein_names = list()
     FASTAFile().load(fasta, fasta_proteins)
     uniquepepcounts = dict()  # type: dict[str, int]
     digestor = ProteaseDigestion()
@@ -119,9 +111,12 @@ def ibaq_compute(fasta: str, peptides: str, enzyme: str, normalize: bool, min_aa
         digest = list()  # type: list[str]
         digestor.digest(AASequence().fromString(entry.sequence), digest, min_aa, max_aa)
         digestuniq = set(digest)
-        uniquepepcounts[parse_uniprot_name(entry.identifier)] = len(digestuniq)
+        protein_name = parse_uniprot_name(entry.identifier)
+        uniquepepcounts[protein_name] = len(digestuniq)
+        protein_names.append(protein_name)
 
     data = pd.read_csv(peptides, sep=",")
+    data = data[data[PROTEIN_NAME].isin(protein_names)]
     print(data.head())
     # next line assumes unique peptides only (at least per indistinguishable group)
 
@@ -144,12 +139,13 @@ def ibaq_compute(fasta: str, peptides: str, enzyme: str, normalize: bool, min_aa
 
     # Print the distribution of the protein IBAQ values
     if verbose:
+        plot_width = len(set(res['SampleID'])) * 0.5 + 10
         pdf = PdfPages(qc_report)
-        density = plot_distributions(res, plot_column, SAMPLE_ID, log2=True, title="IBAQ Distribution")
+        density = plot_distributions(res, plot_column, SAMPLE_ID, log2=True, width=plot_width, title="IBAQ Distribution")
         plt.show()
         pdf.savefig(density)
-        box = plot_box_plot(res, plot_column, SAMPLE_ID, log2=True,
-                      title="IBAQ Distribution", violin=False)
+        box = plot_box_plot(res, plot_column, SAMPLE_ID, log2=True, width=plot_width,
+                            title="IBAQ Distribution", violin=False)
         plt.show()
         pdf.savefig(box)
         pdf.close()
