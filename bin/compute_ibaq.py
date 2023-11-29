@@ -13,7 +13,7 @@ from pyopenms import *
 from ibaq.ibaqpy_commons import (CONDITION, IBAQ, IBAQ_LOG, IBAQ_NORMALIZED,
                                  IBAQ_PPB, NORM_INTENSITY, PROTEIN_NAME,
                                  SAMPLE_ID, plot_box_plot, plot_distributions,
-                                 print_help_msg)
+                                 print_help_msg, get_accession)
 
 
 def normalize(group):
@@ -41,15 +41,6 @@ def normalize_ibaq(res: DataFrame) -> DataFrame:
     res[IBAQ_PPB] = res[IBAQ_NORMALIZED].apply(lambda x: x * 100000000)
 
     return res
-
-
-def parse_uniprot_name(identifier: str) -> str:
-    """
-    Parse the uniprot name from the identifier  (e.g. sp|P12345|PROT_NAME)
-    :param identifier: Uniprot identifier
-    :return:
-    """
-    return identifier.split("|")[2]
 
 
 @click.command()
@@ -119,7 +110,7 @@ def ibaq_compute(
         exit(1)
 
     fasta_proteins = list()  # type: list[FASTAEntry]
-    protein_names = list()
+    protein_accessions = list()
     FASTAFile().load(fasta, fasta_proteins)
     uniquepepcounts = dict()  # type: dict[str, int]
     digestor = ProteaseDigestion()
@@ -144,12 +135,13 @@ def ibaq_compute(
         digest = list()  # type: list[str]
         digestor.digest(AASequence().fromString(entry.sequence), digest, min_aa, max_aa)
         digestuniq = set(digest)
-        protein_name = parse_uniprot_name(entry.identifier)
+        # TODO: Try to get protein accessions from multiple databases.
+        protein_name = get_accession(entry.identifier)
         uniquepepcounts[protein_name] = len(digestuniq)
-        protein_names.append(protein_name)
+        protein_accessions.append(protein_name)
 
     data = pd.read_csv(peptides, sep=",")
-    data = data[data[PROTEIN_NAME].isin(protein_names)]
+    data = data[data[PROTEIN_NAME].isin(protein_accessions)]
     print(data.head())
     # next line assumes unique peptides only (at least per indistinguishable group)
 

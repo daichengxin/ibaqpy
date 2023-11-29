@@ -2,7 +2,7 @@
 
 import os
 import random
-
+import uuid
 from matplotlib.backends.backend_pdf import PdfPages
 import pyarrow.parquet as pq
 from ibaq.ibaqpy_commons import *
@@ -15,107 +15,9 @@ def read_large_parquet(parquet_path: str, batch_size: int = 100000):
         yield batch_df
 
 
-def parse_uniprot_accession(uniprot_id: str) -> str:
-    """
-    Parse the uniprot accession from the uniprot id in the form of
-    tr|CONTAMINANT_Q3SX28|CONTAMINANT_TPM2_BOVIN and convert to CONTAMINANT_TPM2_BOVIN
-    :param uniprot_id: uniprot id
-    :return: uniprot accession
-    """
-    uniprot_list = uniprot_id.split(";")
-    result_uniprot_list = []
-    for accession in uniprot_list:
-        if accession.count("|") == 2:
-            accession = accession.split("|")[2]
-        result_uniprot_list.append(accession)
-    return ";".join(result_uniprot_list)
-
-
-def print_dataset_size(dataset: DataFrame, message: str, verbose: bool) -> None:
-    if verbose:
-        print(message + str(len(dataset.index)))
-
-
-def print_help_msg(command) -> None:
-    """
-    Print help information
-    :param command: command to print helps
-    :return: print help
-    """
-    with click.Context(command) as ctx:
-        click.echo(command.get_help(ctx))
-
-
-def get_peptidoform_normalize_intensities(
-    dataset: DataFrame, higher_intensity: bool = True
-) -> DataFrame:
-    """
-    Select the best peptidoform for the same sample and the same replicates. A peptidoform is the combination of
-    a (PeptideSequence + Modifications) + Charge state.
-    :param dataset: dataset including all properties
-    :param higher_intensity: select based on normalize intensity, if false based on best scored peptide
-    :return:
-    """
-    dataset = dataset[dataset[NORM_INTENSITY].notna()]
-    if higher_intensity:
-        dataset = dataset.loc[
-            dataset.groupby(
-                [PEPTIDE_SEQUENCE, PEPTIDE_CHARGE, SAMPLE_ID, CONDITION, BIOREPLICATE]
-            )[NORM_INTENSITY].idxmax()
-        ].reset_index(drop=True)
-    else:
-        dataset = dataset.loc[
-            dataset.groupby(
-                [PEPTIDE_SEQUENCE, PEPTIDE_CHARGE, SAMPLE_ID, CONDITION, BIOREPLICATE]
-            )[SEARCH_ENGINE].idxmax()
-        ].reset_index(drop=True)
-    print(dataset)
-    return dataset
-
-
-def average_peptide_intensities(dataset: DataFrame) -> DataFrame:
-    """
-    Median the intensities of all the peptidoforms for a specific peptide sample combination.
-    :param dataset: Dataframe containing all the peptidoforms
-    :return: New dataframe
-    """
-    dataset_df = dataset.groupby([PEPTIDE_CANONICAL, SAMPLE_ID, CONDITION])[
-        NORM_INTENSITY
-    ].median()
-    dataset_df = dataset_df.reset_index()
-    dataset_df = pd.merge(
-        dataset_df,
-        dataset[[PROTEIN_NAME, PEPTIDE_CANONICAL, SAMPLE_ID, CONDITION]],
-        how="left",
-        on=[PEPTIDE_CANONICAL, SAMPLE_ID, CONDITION],
-    )
-
-    return dataset_df
-
-
-def get_study_accession(sample_id: str) -> str:
-    """
-    Get the project accession from the Sample accession. The function expected a sample accession in the following
-    format PROJECT-SAMPLEID
-    :param sample_id: Sample Accession
-    :return: study accession
-    """
-    return sample_id.split("-")[0]
-
-
-def get_reference_name(reference_spectrum: str) -> str:
-    """
-    Get the reference name from Reference column. The function expected a reference name in the following format eg.
-    20150820_Haura-Pilot-TMT1-bRPLC03-2.mzML_controllerType=0 controllerNumber=1 scan=16340
-    :param reference_spectrum:
-    :return: reference name
-    """
-    return re.split(r"\.mzML|\.MZML|\.raw|\.RAW", reference_spectrum)[0]
-
-
 def extract_label_from_sdrf(sdrf_path: str, compression: bool) -> tuple:
     sdrf_df = pd.read_csv(sdrf_path, sep="\t", compression=compression)
-    sdrf_df[REFERENCE] = sdrf_df["comment[data file]"].apply(remove_extension_file)
+    sdrf_df[REFERENCE] = sdrf_df["comment[data file]"].apply(get_spectrum_prefix)
 
     # Determine label type
     labels = set(sdrf_df["comment[label]"])
@@ -165,6 +67,48 @@ def extract_label_from_sdrf(sdrf_path: str, compression: bool) -> tuple:
     return sdrf_df, label, sample_names, choice
 
 
+def extract_label_from_parquet(parquet_path: str, batch_size: int = 100000) -> tuple:
+    parquet_chunks = read_large_parquet(parquet_path, batch_size)
+    labels, samples = list(), list()
+    for chunk in parquet_chunks:
+        samples.extend(chunk["sample_accession"].unique().tolist())
+        labels.extend(chunk["isotope_label_type"].unique().tolist())
+        samples = list(set(samples))
+        labels = list(set(labels))
+    choice = None
+    if len(labels) == 1:
+        label = "LFQ"
+    elif "TMT" in ",".join(labels) or "tmt" in ",".join(labels):
+        if (
+            len(labels) > 11
+            or "TMT134N" in labels
+            or "TMT133C" in labels
+            or "TMT133N" in labels
+            or "TMT132C" in labels
+            or "TMT132N" in labels
+        ):
+            choice = TMT16plex
+        elif len(labels) == 11 or "TMT131C" in labels:
+            choice = TMT11plex
+        elif len(labels) > 6:
+            choice = TMT10plex
+        else:
+            choice = TMT6plex
+        label = "TMT"
+    elif "ITRAQ" in ",".join(labels) or "itraq" in ",".join(labels):
+        if len(labels) > 4:
+            choice = ITRAQ8plex
+        else:
+            choice = ITRAQ4plex
+        label = "ITRAQ"
+    else:
+        print("Warning: Only support label free, TMT and ITRAQ experiment!")
+        exit(1)
+
+    return label, samples, choice
+
+
+
 @click.command()
 @click.option(
     "-m", "--msstats", help="MsStats file import generated by quantms", default=None
@@ -176,7 +120,9 @@ def extract_label_from_sdrf(sdrf_path: str, compression: bool) -> tuple:
     default=None,
 )
 @click.option(
-    "-s", "--sdrf", help="SDRF file import generated by quantms", required=True
+    "-s",
+    "--sdrf",
+    help="SDRF file import generated by quantms",
 )
 @click.option("--compress", help="Read all files compress", is_flag=True)
 @click.option(
@@ -238,7 +184,7 @@ def extract_label_from_sdrf(sdrf_path: str, compression: bool) -> tuple:
 @click.option(
     "--qc_report",
     help="PDF file to store multiple QC images",
-    default="StreamPeptideNorm-QCprofile.pdf",
+    default=f"StreamPeptideNorm-QCprofile.pdf",
 )
 def peptide_normalization(
     msstats: str,
@@ -283,11 +229,11 @@ def peptide_normalization(
     pd.set_option("display.max_columns", None)
     print("Loading data..")
     compression_method = "gzip" if compress else None
-    sdrf_df, label, sample_names, choice = extract_label_from_sdrf(
-        sdrf, compression_method
-    )
 
     if parquet is None:
+        sdrf_df, label, sample_names, choice = extract_label_from_sdrf(
+            sdrf, compression_method
+        )
         msstats_chunks = pd.read_csv(
             msstats,
             sep=",",
@@ -296,12 +242,13 @@ def peptide_normalization(
             chunksize=chunksize,
         )
     else:
+        label, sample_names, choice = extract_label_from_parquet(parquet, batch_size=chunksize)
         msstats_chunks = read_large_parquet(parquet, batch_size=chunksize)
 
     # TODO: Stream processing to obtain strong proteins with more than 2 uniqe peptides
-    print("IBAQPY WARNING: Writing files into ibaqpy_temp...")
-    if not os.path.exists("ibaqpy_temp/"):
-        os.mkdir("ibaqpy_temp/")
+    temp = f"Temp-{str(uuid.uuid4())}/"
+    os.mkdir(temp)
+    print(f"IBAQPY WARNING: Writing files into {temp}...")
     unique_peptides = {}
     canonical_dict = {}
     group_intensities = {}
@@ -353,6 +300,7 @@ def peptide_normalization(
                 [
                     PROTEIN_NAME,
                     PEPTIDE_SEQUENCE,
+                    PEPTIDE_CANONICAL,
                     PEPTIDE_CHARGE,
                     INTENSITY,
                     REFERENCE,
@@ -365,50 +313,50 @@ def peptide_normalization(
                 ]
             ]
 
-        # Merged the SDRF with the Resulted file
-        if label == "LFQ":
-            msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(remove_extension_file)
-            result_df = pd.merge(
-                msstats_df,
-                sdrf_df[["source name", REFERENCE]],
-                how="left",
-                on=[REFERENCE],
-            )
-        elif label == "TMT":
-            msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(get_reference_name)
-            result_df = pd.merge(
-                msstats_df,
-                sdrf_df[["source name", REFERENCE, CHANNEL]],
-                how="left",
-                on=[REFERENCE, CHANNEL],
-            )
-            result_df = result_df[result_df["Condition"] != "Empty"]
-            result_df.rename(columns={"Charge": PEPTIDE_CHARGE}, inplace=True)
-        elif label == "ITRAQ":
-            msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(get_reference_name)
-            result_df = pd.merge(
-                msstats_df,
-                sdrf_df[["source name", REFERENCE, CHANNEL]],
-                how="left",
-                on=[REFERENCE, CHANNEL],
-            )
-            result_df = result_df[result_df["Condition"] != "Empty"]
-            result_df.rename(columns={"Charge": PEPTIDE_CHARGE}, inplace=True)
         if parquet is None:
-            result_df.rename(columns={"source name": SAMPLE_ID}, inplace=True)
+            # Merged the SDRF with the Resulted file
+            if label == "LFQ":
+                msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(get_spectrum_prefix)
+                result_df = pd.merge(
+                    msstats_df,
+                    sdrf_df[["source name", REFERENCE]],
+                    how="left",
+                    on=[REFERENCE],
+                )
+            elif label == "TMT":
+                msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(get_spectrum_prefix)
+                result_df = pd.merge(
+                    msstats_df,
+                    sdrf_df[["source name", REFERENCE, CHANNEL]],
+                    how="left",
+                    on=[REFERENCE, CHANNEL],
+                )
+                result_df = result_df[result_df["Condition"] != "Empty"]
+                result_df.rename(columns={"Charge": PEPTIDE_CHARGE}, inplace=True)
+            elif label == "ITRAQ":
+                msstats_df[REFERENCE] = msstats_df[REFERENCE].apply(get_spectrum_prefix)
+                result_df = pd.merge(
+                    msstats_df,
+                    sdrf_df[["source name", REFERENCE, CHANNEL]],
+                    how="left",
+                    on=[REFERENCE, CHANNEL],
+                )
+                result_df = result_df[result_df["Condition"] != "Empty"]
+                result_df.rename(columns={"Charge": PEPTIDE_CHARGE}, inplace=True)
+                result_df.rename(columns={"source name": SAMPLE_ID}, inplace=True)
         else:
-            result_df.drop("source name", inplace=True, axis=1)
+            result_df = msstats_df[msstats_df["Condition"] != "Empty"]
         result_df[STUDY_ID] = result_df[SAMPLE_ID].str.split("-").str[0]
 
         # Write CSVs by Sample ID
         for sample in sample_names:
-            file_name = f"ibaqpy_temp/{sample}.csv"
+            file_name = f"{temp}/{sample}.csv"
             write_mode = "a" if os.path.exists(file_name) else "w"
             header = False if os.path.exists(file_name) else True
             result_df[result_df[SAMPLE_ID] == sample].to_csv(
                 file_name, index=False, header=header, mode=write_mode
             )
-        unique_df = result_df.groupby(PEPTIDE_CANONICAL).filter(
+        unique_df = result_df.groupby([PEPTIDE_CANONICAL]).filter(
             lambda x: len(set(x[PROTEIN_NAME])) == 1
         )[[PEPTIDE_CANONICAL, PROTEIN_NAME]]
         unique_dict = dict(zip(unique_df[PEPTIDE_CANONICAL], unique_df[PROTEIN_NAME]))
@@ -439,14 +387,14 @@ def peptide_normalization(
         print(
             f"{sample} -> Filter out proteins containing unique peptides fewer than {min_unique}.."
         )
-        msstats_df = pd.read_csv(f"ibaqpy_temp/{sample}.csv", sep=",")
+        msstats_df = pd.read_csv(f"{temp}/{sample}.csv", sep=",")
         msstats_df = msstats_df[msstats_df[PROTEIN_NAME].isin(strong_proteins)]
         print(f"{sample} -> Logarithmic if specified..")
         msstats_df.loc[msstats_df.Intensity == 0, INTENSITY] = 1
         msstats_df[NORM_INTENSITY] = (
             np.log2(msstats_df[INTENSITY]) if log2 else msstats_df[INTENSITY]
         )
-        msstats_df.to_csv(f"ibaqpy_temp/{sample}.csv", index=False, sep=",")
+        msstats_df.to_csv(f"{temp}/{sample}.csv", index=False, sep=",")
         if sample in plot_samples:
             original_intensities_df = pd.concat([original_intensities_df, msstats_df])
         if not skip_normalization:
@@ -641,7 +589,7 @@ def peptide_normalization(
                     key: np.median(values) for key, values in group_intensities.items()
                 }
     for sample in sample_names:
-        dataset_df = pd.read_csv(f"ibaqpy_temp/{sample}.csv", sep=",")
+        dataset_df = pd.read_csv(f"{temp}/{sample}.csv", sep=",")
         if len(dataset_df) != 0:
             norm_df = normalization(
                 dataset_df, label, sample, skip_normalization, nmethod
@@ -654,7 +602,7 @@ def peptide_normalization(
                 peptide: peptides_count.get(peptide, 0) + 1
                 for peptide in sample_peptides
             }
-        norm_df.to_csv(f"ibaqpy_temp/{sample}.csv", sep=",", index=False)
+        norm_df.to_csv(f"{temp}/{sample}.csv", sep=",", index=False)
         if sample in plot_samples:
             norm_intensities_df = pd.concat([norm_intensities_df, norm_df])
     del group_intensities, quantile
@@ -702,23 +650,24 @@ def peptide_normalization(
 
     final_norm_intensities_df = pd.DataFrame()
     for sample in sample_names:
-        dataset_df = pd.read_csv(f"ibaqpy_temp/{sample}.csv", sep=",")
+        dataset_df = pd.read_csv(f"{temp}/{sample}.csv", sep=",")
         if remove_low_frequency_peptides:
             # Filter low-frequency peptides, which indicate whether the peptide occurs less than 20% in all samples or
             # only in one sample
             dataset_df = dataset_df[dataset_df[PEPTIDE_CANONICAL].isin(strong_peptides)]
-            del strong_peptides
         dataset_df = dataset_df[
             [PEPTIDE_CANONICAL, PROTEIN_NAME, SAMPLE_ID, NORM_INTENSITY, CONDITION]
         ]
         write_mode = "a" if os.path.exists(output) else "w"
         header = False if os.path.exists(output) else True
         dataset_df.to_csv(output, index=False, header=header, mode=write_mode)
-        dataset_df.to_csv(f"ibaqpy_temp/{sample}.csv", sep=",", index=False)
+        dataset_df.to_csv(f"{temp}/{sample}.csv", sep=",", index=False)
         if sample in plot_samples:
             final_norm_intensities_df = pd.concat(
                 [final_norm_intensities_df, dataset_df]
             )
+    if remove_low_frequency_peptides:
+        del strong_peptides
 
     # Save final normalized intensities QC plots
     log_after_norm = (
